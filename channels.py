@@ -48,6 +48,8 @@ CHANNELS = [
     ('ignLoad',       None,                     88,   'S16', 1,     0,   ''),
     # dwell sai em us: dwellRun (0,1 ms) * 100 em speeduino_core.cpp:1806-1810.
     ('dwell',         'DWELL',                  90,   'U16', 0.001, 0,   'ms'),
+    ('idleTarget',    None,                     92,   'U08', 10,    0,   'rpm'),
+    ('mapDot',        None,                     93,   'S16', 1,     0,   'kPa/s'),
     ('ve',            'VE',                    102,   'U08', 1,     0,   '%'),
     ('vss',           'VELOCIMETRO',           104,   'U16', 1,     0,   'km/h'),
     ('gear',          None,                    106,   'U08', 1,     0,   ''),

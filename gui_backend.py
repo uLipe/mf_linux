@@ -581,6 +581,24 @@ def _raw_bounds(f):
     return (-span // 2, span // 2 - 1) if f.signed else (0, span - 1)
 
 
+def _eng(spec, raw):
+    return raw * spec['scale'] + spec['add']
+
+
+def _fmt(spec, raw):
+    d = spec.get('decimals')
+    return '%.*f' % (_decimals(spec['scale']) if d is None else d, _eng(spec, raw))
+
+
+def _to_raw(spec, f, eng):
+    lo, hi = sorted(_eng(spec, r) for r in _raw_bounds(f))
+    if spec['lo'] is not None:
+        lo = max(lo, spec['lo'])
+    if spec['hi'] is not None:
+        hi = min(hi, spec['hi'])
+    return round((max(lo, min(hi, eng)) - spec['add']) / spec['scale'])
+
+
 class ConfigEditor(QObject):
     """Paineis de config_panels.PANELS. Cada alteracao vira um patch dos bytes do campo sobre o
     cache de paginas do worker, entao nao pisa em tabela editada na mesma pagina."""
@@ -591,7 +609,7 @@ class ConfigEditor(QObject):
         super().__init__()
         self.worker, self.live = worker, live
         self.panel = None
-        self._items = []                # (item, pagina, base, Field, Field do 'when' ou None)
+        self._items = []                # (item, pagina, base, Field, 'when' e eixo X como (pagina, base, Field))
         self._pages, self._baseline = {}, {}
         self._pending, self._dirty = set(), set()
         self._reboot = self._kgm = False
@@ -609,7 +627,7 @@ class ConfigEditor(QObject):
         return f.get(self._pages[page][base:])
 
     def _page_set(self):
-        return {page for _, page, _, _, _ in self._items}
+        return {item[1] for item in self._items} | {loc[0] for item in self._items for loc in item[4:] if loc}
 
     # ------------------------------------------------------------ ECU -> GUI
 
@@ -675,19 +693,19 @@ class ConfigEditor(QObject):
                 if 'ref' in it:
                     page, base, f = resolve(it['ref'])
                 when = resolve(it['when']) if it.get('when') else None
-                self._items.append((it, page, base, f, when))
+                xloc = resolve(it['xref']) if it.get('xref') else None
+                self._items.append((it, page, base, f, when, xloc))
         self._pending = {p for p in self._page_set() if p is not None}
         self._set_status('lendo...')
         self.changed.emit()
         for page in sorted(self._pending):
             self.worker.load_page(page)
 
-    def _write(self, index, raw):
-        it, page, base, f, _ = self._items[index]
-        if f is None or page in self._pending or page not in self._pages:
+    def _write(self, index, raw, loc=None):
+        it = self._items[index][0]
+        page, base, f = loc or self._items[index][1:4]
+        if f is None or it.get('readonly') or page in self._pending or page not in self._pages:
             return
-        lo, hi = _raw_bounds(f)
-        raw = max(lo, min(hi, raw))
         if raw == self._get(page, base, f):
             return
         sub = bytearray(self._pages[page][base:])
@@ -700,36 +718,55 @@ class ConfigEditor(QObject):
         self.worker.patch_page(page, base + off, data)
         self.changed.emit()
 
-    def _eng_bounds(self, it, f):
-        lo, hi = _raw_bounds(f)
-        elo, ehi = lo * it['scale'] + it['add'], hi * it['scale'] + it['add']
-        return (elo if it['lo'] is None else max(elo, it['lo']),
-                ehi if it['hi'] is None else min(ehi, it['hi']))
-
-    def _to_raw(self, it, f, eng):
-        lo, hi = self._eng_bounds(it, f)
-        return round((max(lo, min(hi, eng)) - it['add']) / it['scale'])
-
     @Slot(int, str, result=bool)
     def setText(self, index, text):
-        it, _, _, f, _ = self._items[index]
+        it, _, _, f, _, _ = self._items[index]
         try:
             eng = float(text.replace(',', '.'))
         except ValueError:
             return False
-        self._write(index, self._to_raw(it, f, eng))
+        self._write(index, _to_raw(it, f, eng))
         return True
 
     @Slot(int, int)
     def nudge(self, index, steps):
-        it, page, base, f, _ = self._items[index]
+        it, page, base, f, _, _ = self._items[index]
         if page in self._pages:
-            eng = (self._get(page, base, f) + steps) * it['scale'] + it['add']
-            self._write(index, self._to_raw(it, f, eng))
+            self._write(index, _to_raw(it, f, _eng(it, self._get(page, base, f) + steps)))
 
     @Slot(int, int)
     def choose(self, index, raw):
         self._write(index, raw)
+
+    def _cell(self, index, axis, i, eng_fn):
+        it, page, base, yf, _, xloc = self._items[index]
+        loc, spec = (xloc, it['x']) if axis == 0 else ((page, base, yf), it['y'])
+        if loc is None or loc[0] not in self._pages:
+            return
+        page, base, f = loc
+        vals = list(self._get(page, base, f))
+        raw = _to_raw(spec, f, eng_fn(_eng(spec, vals[i]), spec))
+        if axis == 0:
+            # table2D_getValue interpola assumindo eixo crescente.
+            if i > 0:
+                raw = max(raw, vals[i - 1])
+            if i < len(vals) - 1:
+                raw = min(raw, vals[i + 1])
+        vals[i] = raw
+        self._write(index, vals, loc)
+
+    @Slot(int, int, int, str, result=bool)
+    def setCell(self, index, axis, i, text):
+        try:
+            eng = float(text.replace(',', '.'))
+        except ValueError:
+            return False
+        self._cell(index, axis, i, lambda cur, spec: eng)
+        return True
+
+    @Slot(int, int, int, int)
+    def nudgeCell(self, index, axis, i, steps):
+        self._cell(index, axis, i, lambda cur, spec: cur + steps * spec['scale'])
 
     @Slot()
     def burn(self):
@@ -745,23 +782,46 @@ class ConfigEditor(QObject):
 
     # ------------------------------------------------------------ propriedades
 
+    def _series(self, spec, page, base, f):
+        vals = self._get(page, base, f)
+        old = f.get(self._baseline[page][base:]) if page in self._baseline else vals
+        return ([_fmt(spec, v) for v in vals], [_eng(spec, v) for v in vals],
+                [a != b for a, b in zip(vals, old)])
+
     def _row(self, index):
-        it, page, base, f, when = self._items[index]
+        it, page, base, f, when, xloc = self._items[index]
+        curve = it['kind'] == 'curve'
         row = {'index': index, 'kind': it['kind'], 'label': it['label'],
                'detail': it.get('detail', ''), 'note': it.get('note', ''),
-               'live': it.get('live'), 'reboot': it.get('apply') == 'reboot',
+               'live': None if curve else it.get('live'), 'cursor': it.get('live') if curve else '',
+               'reboot': it.get('apply') == 'reboot', 'readonly': bool(it.get('readonly')),
+               'burn': it.get('ref') in KGM and not it.get('readonly'),
                'enabled': True, 'changed': False, 'ready': False}
         if when is not None and when[0] in self._pages:
             row['enabled'] = bool(self._get(*when))
-        if f is None or page not in self._pages:
+        if f is None or page not in self._pages or xloc and xloc[0] not in self._pages:
+            return row
+        row['ready'] = True
+        if curve:
+            row['ys'], row['yv'], row['ychg'] = self._series(it['y'], page, base, f)
+            if xloc:
+                row['xs'], row['xv'], row['xchg'] = self._series(it['x'], *xloc)
+            else:
+                n = len(row['ys'])
+                row['xs'] = it['xlabels'] or [str(i + 1) for i in range(n)]
+                row['xv'], row['xchg'] = list(range(n)), [False] * n
+            row['xunit'], row['yunit'] = it['x']['unit'], it['y']['unit']
+            row['xedit'] = xloc is not None
+            row['changed'] = any(row['xchg']) or any(row['ychg'])
             return row
         raw = self._get(page, base, f)
-        row['ready'] = True
         row['changed'] = page in self._baseline and raw != f.get(self._baseline[page][base:])
         row['raw'] = raw
         if it['kind'] == 'num':
-            row['text'] = '%.*f' % (_decimals(it['scale']), raw * it['scale'] + it['add'])
+            row['text'] = _fmt(it, raw)
             row['unit'] = it['unit']
+        elif it['kind'] == 'text':
+            row['text'] = raw.to_bytes(f.size, 'little').decode('ascii', 'replace')
         else:
             row['options'] = [{'raw': r, 'text': t} for r, t in it['options']]
             row['text'] = next((t for r, t in it['options'] if r == raw), 'cru %d' % raw)
