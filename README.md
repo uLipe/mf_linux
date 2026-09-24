@@ -20,6 +20,7 @@ gravação na flash.
 - [Painel](#painel)
 - [Monitor](#monitor)
 - [Tabelas (tuning)](#tabelas-tuning)
+- [Configuração](#configuração)
 - [Linha de comando: `kgmctl`](#linha-de-comando-kgmctl)
 - [Tuning básico do zero](#tuning-básico-do-zero)
 - [Arquivos do projeto](#arquivos-do-projeto)
@@ -251,8 +252,31 @@ Segurar o `+` não entope a serial: o app manda só o estado final da tabela.
 ### Limitações atuais
 
 - **Os eixos (RPM e carga) ainda não são editáveis pela interface.**
-- As configurações (injetores, roda fônica, sonda, aquecimento...) ainda não têm tela: use o
-  `kgmctl` (abaixo).
+- Só o ar-condicionado tem tela de configuração (próxima seção). O resto
+  (injetores, roda fônica, sonda, aquecimento...) ainda é pelo `kgmctl` (abaixo).
+
+---
+
+## Configuração
+
+Painéis com os mesmos campos, rótulos e faixas do MasterFuel. Por enquanto só o
+**Ar-condicionado**.
+
+![Configuração do ar-condicionado](docs/config-arcond.png)
+
+*Captura com o tune da bancada; o estado ao vivo do A/C é simulado.*
+
+- Número: `−` / `+` andam um passo da ECU (10 rpm, 0,1 s, 0,5 %...). Clique no campo, digite e
+  aperte Enter; Esc desiste.
+- Opções: clique na opção desejada.
+- Ponto amarelo à esquerda = valor diferente do que está na flash.
+- Linha apagada = depende de outra chave desligada (ex.: tudo do A/C com o A/C desligado).
+- **"requer reiniciar a ECU"**: o firmware só lê esse campo ao ligar. Grave na flash e desligue e
+  ligue a ECU.
+- O enriquecimento de combustível do A/C fica na área própria da KGM, que o firmware só relê
+  quando a página vai para a flash. Sem gravar, não muda nada.
+- **Estado ao vivo**: pedido, compressor, atraso e bloqueios (RPM, TPS, temperatura), direto do
+  byte `airConStatus`.
 
 ---
 
@@ -552,13 +576,14 @@ aquele ponto.
 |---|---|
 | `mfgui.py` | Interface gráfica (ponto de entrada) |
 | `kgmctl.py` | Linha de comando |
-| `gui_backend.py` | Ponte entre a ECU e a interface: leitura em thread própria, editor de tabelas |
+| `gui_backend.py` | Ponte entre a ECU e a interface: leitura em thread própria, editores de tabelas e de configuração |
+| `config_panels.py` | Campos, rótulos e escalas de cada painel de configuração |
 | `protocol.py` | Protocolo serial da ECU (quadros, CRC, comandos). Bloqueia os comandos que reiniciam a ECU |
 | `pages.py` | Mapa das 15 páginas de configuração, tabelas e campos |
 | `layouts.py` | Layout dos campos de configuração, **gerado** a partir do firmware (não editar à mão) |
 | `gen_layouts.py` | Gera o `layouts.py` a partir do `firmware.elf` (rodar de novo se o firmware mudar os structs de configuração) |
 | `channels.py` | Canais ao vivo: posição, escala, unidade e nome no MasterFuel |
-| `qml/` | Telas (Painel, Monitor, Tabelas) |
+| `qml/` | Telas (Painel, Monitor, Tabelas, Configuração) |
 | `shaders/` | Shader dos mostradores. Compilado automaticamente para `.qsb` ao abrir o app |
 | `backups/` | Backups feitos pelo `dump` e pelo `restore` |
 | `docs/` | Imagens deste README |

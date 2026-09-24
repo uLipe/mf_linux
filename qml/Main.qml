@@ -93,6 +93,7 @@ Window {
             TabButton { text: "Painel"; index: 0 }
             TabButton { text: "Monitor"; index: 1 }
             TabButton { text: "Tabelas"; index: 2 }
+            TabButton { text: "Configuração"; index: 3 }
             Item { Layout.fillWidth: true }
             Text {
                 text: on ? "" : live.error
@@ -293,6 +294,12 @@ Window {
             Layout.fillHeight: true
         }
 
+        ConfigView {
+            visible: win.page === 3
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+        }
+
         // ------------------------------------------------------------ Monitor
         ColumnLayout {
             visible: win.page === 1
@@ -347,7 +354,10 @@ Window {
         }
     }
 
-    onPageChanged: if (page === 2 && !editor.currentName) editor.open("ve")
+    onPageChanged: {
+        if (page === 2 && !editor.currentName) editor.open("ve")
+        if (page === 3 && !config.current) config.open(config.panels[0].id)
+    }
 
     property bool showAll: false
 

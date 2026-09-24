@@ -9,6 +9,7 @@ from PySide6.QtGui import QOffscreenSurface, QOpenGLContext, QVector3D
 from PySide6.QtGraphs import QSurfaceDataItem
 
 from channels import CHANNELS, decode
+from config_panels import KGM, PANELS, resolve
 from pages import PAGE_SIZES, TABLES, Table, locate
 from protocol import Ecu, EcuError
 
@@ -35,6 +36,8 @@ class EcuWorker(QThread):
     link = Signal(bool, str)
     tableLoaded = Signal(str, bytes)
     tableWritten = Signal(str, bool, str)
+    pageLoaded = Signal(int, bytes)
+    pageWritten = Signal(int, bool, str)
     burned = Signal(int, bool, str)
 
     def __init__(self, port, hz):
@@ -49,6 +52,12 @@ class EcuWorker(QThread):
 
     def write_table(self, name, data):
         self._jobs.put(('write', name, bytes(data)))
+
+    def load_page(self, page):
+        self._jobs.put(('loadpage', page, None))
+
+    def patch_page(self, page, offset, data):
+        self._jobs.put(('patch', page, (offset, bytes(data))))
 
     def burn_page(self, page):
         self._jobs.put(('burn', page, None))
@@ -74,20 +83,32 @@ class EcuWorker(QThread):
         # Tecla segurada gera uma rajada de escritas da mesma tabela; so o ultimo estado
         # importa, entao cada tabela e escrita uma vez por rodada.
         latest = {name: data for kind, name, data in jobs if kind == 'write'}
+        patches = {}
+        for kind, page, patch in jobs:
+            if kind == 'patch':
+                patches.setdefault(page, []).append(patch)
         for kind, arg, _ in jobs:
             try:
                 if kind == 'load':
                     page, off, size = locate(arg)
                     self._pages[page] = ecu.read_page(page, PAGE_SIZES[page])
                     self.tableLoaded.emit(arg, self._pages[page][off:off + size])
+                elif kind == 'loadpage':
+                    self._pages[arg] = ecu.read_page(arg, PAGE_SIZES[arg])
+                    self.pageLoaded.emit(arg, self._pages[arg])
                 elif kind == 'write' and arg in latest:
                     self._write(ecu, arg, latest.pop(arg))
+                elif kind == 'patch' and arg in patches:
+                    self._patch(ecu, arg, patches.pop(arg))
                 elif kind == 'burn':
                     ecu.burn(arg)
                     self.burned.emit(arg, True, '')
             except EcuError as ex:
                 if kind == 'burn':
                     self.burned.emit(arg, False, str(ex))
+                elif kind in ('loadpage', 'patch'):
+                    self._pages.pop(arg, None)
+                    self.pageWritten.emit(arg, False, str(ex))
                 else:
                     self._pages.pop(locate(arg)[0], None)
                     self.tableWritten.emit(arg, False, str(ex))
@@ -99,6 +120,15 @@ class EcuWorker(QThread):
         n = ecu.write_changes(page, old, new)
         self._pages[page] = new
         self.tableWritten.emit(name, True, '%d bytes, CRC ok' % n)
+
+    def _patch(self, ecu, page, patches):
+        old = self._pages.get(page) or ecu.read_page(page, PAGE_SIZES[page])
+        new = bytearray(old)
+        for off, data in patches:
+            new[off:off + len(data)] = data
+        n = ecu.write_changes(page, old, bytes(new))
+        self._pages[page] = bytes(new)
+        self.pageWritten.emit(page, True, '%d bytes, CRC ok' % n)
 
     def _poll(self, ecu):
         due = time.monotonic()
@@ -542,3 +572,214 @@ class TableEditor(QObject):
     selectionInfo = Property(str, _sel_info, notify=selectionChanged)
     valueMin = Property(float, lambda s: s.table.eng(s.range[0]) if s.table else 0, notify=cellsChanged)
     valueMax = Property(float, lambda s: s.table.eng(s.range[1]) if s.table else 1, notify=cellsChanged)
+
+
+def _raw_bounds(f):
+    if f.bits:
+        return (-(1 << (f.bits - 1)), (1 << (f.bits - 1)) - 1) if f.signed else (0, (1 << f.bits) - 1)
+    span = 1 << (8 * f.elem)
+    return (-span // 2, span // 2 - 1) if f.signed else (0, span - 1)
+
+
+class ConfigEditor(QObject):
+    """Paineis de config_panels.PANELS. Cada alteracao vira um patch dos bytes do campo sobre o
+    cache de paginas do worker, entao nao pisa em tabela editada na mesma pagina."""
+    changed = Signal()
+    statusChanged = Signal()
+
+    def __init__(self, worker, live):
+        super().__init__()
+        self.worker, self.live = worker, live
+        self.panel = None
+        self._items = []                # (item, pagina, base, Field, Field do 'when' ou None)
+        self._pages, self._baseline = {}, {}
+        self._pending, self._dirty = set(), set()
+        self._reboot = self._kgm = False
+        self._status = ''
+        worker.pageLoaded.connect(self._on_loaded)
+        worker.pageWritten.connect(self._on_written)
+        worker.burned.connect(self._on_burned)
+        live.linkChanged.connect(self._on_link)
+
+    def _set_status(self, text):
+        self._status = text
+        self.statusChanged.emit()
+
+    def _get(self, page, base, f):
+        return f.get(self._pages[page][base:])
+
+    def _page_set(self):
+        return {page for _, page, _, _, _ in self._items}
+
+    # ------------------------------------------------------------ ECU -> GUI
+
+    @Slot(int, bytes)
+    def _on_loaded(self, page, data):
+        if page not in self._page_set():
+            return
+        self._pages[page] = bytes(data)
+        self._baseline.setdefault(page, bytes(data))
+        self._pending.discard(page)
+        if not self._pending:
+            self._set_status('lido da ECU')
+            self.changed.emit()
+
+    @Slot(int, bool, str)
+    def _on_written(self, page, ok, info):
+        if page not in self._page_set():
+            return
+        if not ok:
+            self._set_status('falha na escrita: %s — relendo' % info)
+            self._pending.add(page)
+            self.worker.load_page(page)
+            return
+        self._dirty.add(page)
+        if self._reboot:
+            note = 'vale depois de gravar e reiniciar a ECU'
+        elif self._kgm:
+            note = 'vale depois de gravar na flash'
+        else:
+            note = 'não gravado na flash'
+        self._set_status('RAM atualizada (%s) — %s' % (info, note))
+        self.changed.emit()
+
+    @Slot(int, bool, str)
+    def _on_burned(self, page, ok, info):
+        if page not in self._dirty:
+            return
+        if not ok:
+            self._set_status('falha no burn: ' + info)
+            return
+        self._dirty.discard(page)
+        if page in self._pages:
+            self._baseline[page] = self._pages[page]
+        if not self._dirty:
+            self._set_status('gravado na flash' + (' — reinicie a ECU para aplicar' if self._reboot else ''))
+            self._reboot = self._kgm = False
+        self.changed.emit()
+
+    @Slot()
+    def _on_link(self):
+        if self.live.connected and self.panel:
+            self.open(self.panel['id'])
+
+    # ------------------------------------------------------------ GUI -> ECU
+
+    @Slot(str)
+    def open(self, panel_id):
+        self.panel = next(p for p in PANELS if p['id'] == panel_id)
+        self._items = []
+        for _title, items in self.panel['groups']:
+            for it in items:
+                page = base = f = None
+                if 'ref' in it:
+                    page, base, f = resolve(it['ref'])
+                when = resolve(it['when']) if it.get('when') else None
+                self._items.append((it, page, base, f, when))
+        self._pending = {p for p in self._page_set() if p is not None}
+        self._set_status('lendo...')
+        self.changed.emit()
+        for page in sorted(self._pending):
+            self.worker.load_page(page)
+
+    def _write(self, index, raw):
+        it, page, base, f, _ = self._items[index]
+        if f is None or page in self._pending or page not in self._pages:
+            return
+        lo, hi = _raw_bounds(f)
+        raw = max(lo, min(hi, raw))
+        if raw == self._get(page, base, f):
+            return
+        sub = bytearray(self._pages[page][base:])
+        off, n = f.set(sub, raw)
+        data = bytes(sub[off:off + n])
+        p = self._pages[page]
+        self._pages[page] = p[:base + off] + data + p[base + off + n:]
+        self._reboot |= it.get('apply') == 'reboot'
+        self._kgm |= it['ref'] in KGM
+        self.worker.patch_page(page, base + off, data)
+        self.changed.emit()
+
+    def _eng_bounds(self, it, f):
+        lo, hi = _raw_bounds(f)
+        elo, ehi = lo * it['scale'] + it['add'], hi * it['scale'] + it['add']
+        return (elo if it['lo'] is None else max(elo, it['lo']),
+                ehi if it['hi'] is None else min(ehi, it['hi']))
+
+    def _to_raw(self, it, f, eng):
+        lo, hi = self._eng_bounds(it, f)
+        return round((max(lo, min(hi, eng)) - it['add']) / it['scale'])
+
+    @Slot(int, str, result=bool)
+    def setText(self, index, text):
+        it, _, _, f, _ = self._items[index]
+        try:
+            eng = float(text.replace(',', '.'))
+        except ValueError:
+            return False
+        self._write(index, self._to_raw(it, f, eng))
+        return True
+
+    @Slot(int, int)
+    def nudge(self, index, steps):
+        it, page, base, f, _ = self._items[index]
+        if page in self._pages:
+            eng = (self._get(page, base, f) + steps) * it['scale'] + it['add']
+            self._write(index, self._to_raw(it, f, eng))
+
+    @Slot(int, int)
+    def choose(self, index, raw):
+        self._write(index, raw)
+
+    @Slot()
+    def burn(self):
+        if self._dirty:
+            self._set_status('gravando na flash...')
+            for page in sorted(self._dirty):
+                self.worker.burn_page(page)
+
+    @Slot()
+    def reload(self):
+        if self.panel:
+            self.open(self.panel['id'])
+
+    # ------------------------------------------------------------ propriedades
+
+    def _row(self, index):
+        it, page, base, f, when = self._items[index]
+        row = {'index': index, 'kind': it['kind'], 'label': it['label'],
+               'detail': it.get('detail', ''), 'note': it.get('note', ''),
+               'live': it.get('live'), 'reboot': it.get('apply') == 'reboot',
+               'enabled': True, 'changed': False, 'ready': False}
+        if when is not None and when[0] in self._pages:
+            row['enabled'] = bool(self._get(*when))
+        if f is None or page not in self._pages:
+            return row
+        raw = self._get(page, base, f)
+        row['ready'] = True
+        row['changed'] = page in self._baseline and raw != f.get(self._baseline[page][base:])
+        row['raw'] = raw
+        if it['kind'] == 'num':
+            row['text'] = '%.*f' % (_decimals(it['scale']), raw * it['scale'] + it['add'])
+            row['unit'] = it['unit']
+        else:
+            row['options'] = [{'raw': r, 'text': t} for r, t in it['options']]
+            row['text'] = next((t for r, t in it['options'] if r == raw), 'cru %d' % raw)
+        return row
+
+    def _groups(self):
+        if not self.panel:
+            return []
+        out, i = [], 0
+        for title, items in self.panel['groups']:
+            out.append({'title': title, 'rows': [self._row(i + k) for k in range(len(items))]})
+            i += len(items)
+        return out
+
+    panels = Property('QVariantList', lambda s: [{'id': p['id'], 'title': p['title']} for p in PANELS],
+                      constant=True)
+    current = Property(str, lambda s: s.panel['id'] if s.panel else '', notify=changed)
+    title = Property(str, lambda s: s.panel['title'] if s.panel else '', notify=changed)
+    groups = Property('QVariantList', _groups, notify=changed)
+    status = Property(str, lambda s: s._status, notify=statusChanged)
+    dirty = Property(bool, lambda s: bool(s._dirty), notify=changed)

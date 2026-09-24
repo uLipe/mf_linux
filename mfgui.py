@@ -51,7 +51,7 @@ def main():
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtQml import QQmlApplicationEngine
 
-    from gui_backend import EcuWorker, Live, TableEditor, renderer_name
+    from gui_backend import ConfigEditor, EcuWorker, Live, TableEditor, renderer_name
 
     app = QGuiApplication(sys.argv)
     app.setApplicationName('KGM Painel')
@@ -62,10 +62,12 @@ def main():
     worker.link.connect(live.on_link)
 
     editor = TableEditor(worker, live)
+    config = ConfigEditor(worker, live)
 
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty('live', live)
     engine.rootContext().setContextProperty('editor', editor)
+    engine.rootContext().setContextProperty('config', config)
     engine.load(QUrl.fromLocalFile(os.path.join(HERE, 'qml', 'Main.qml')))
     if not engine.rootObjects():
         return 1

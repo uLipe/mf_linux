@@ -2,3 +2,5 @@ singleton Theme 1.0 Theme.qml
 ArcGauge 1.0 ArcGauge.qml
 StripChart 1.0 StripChart.qml
 TableEditor 1.0 TableEditor.qml
+ToolButton 1.0 ToolButton.qml
+ConfigView 1.0 ConfigView.qml
