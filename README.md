@@ -257,38 +257,222 @@ Segurar o `+` não entope a serial: o app manda só o estado final da tabela.
 ### Limitações atuais
 
 - **Os eixos (RPM e carga) ainda não são editáveis pela interface.**
-- Só o ar-condicionado tem tela de configuração (próxima seção). O resto
-  (injetores, roda fônica, sonda, aquecimento...) ainda é pelo `kgmctl` (abaixo).
 
 ---
 
 ## Configuração
 
-Painéis com os campos de configuração agrupados por função, já na unidade real e com as faixas
-aceitas pela ECU. Por enquanto só o **Ar-condicionado**.
+São 15 painéis com os campos de configuração agrupados por função. Cada campo aparece na unidade
+real e só aceita valores dentro da faixa da ECU. Escolha o painel na lista à esquerda: o app lê as
+páginas daquele painel na hora, e "Reler" busca de novo.
 
-![Configuração do ar-condicionado](docs/config-arcond.png)
+As capturas abaixo foram feitas com a ECU da bancada ligada a um simulador de roda fônica, com o
+motor a ~1200 RPM e a ~43 °C.
 
-*Captura com o tune da bancada; o estado ao vivo do A/C é simulado.*
+### Como editar
 
-- Número: `−` / `+` andam um passo da ECU (10 rpm, 0,1 s, 0,5 %...). Clique no campo, digite e
-  aperte Enter; Esc desiste.
-- Opções: clique na opção desejada.
-- Ponto amarelo à esquerda = valor diferente do que está na flash.
-- Linha apagada = depende de outra chave desligada (ex.: tudo do A/C com o A/C desligado).
+| Tipo | Como |
+|---|---|
+| Número | `−` / `+` andam um passo da ECU (10 rpm, 0,1 s, 0,5 %...). Clique no campo, digite e aperte Enter; Esc desiste |
+| Opções | clique na opção desejada |
+| Curva | gráfico e, embaixo, a linha do eixo e a linha dos valores. Clique na célula, digite e aperte Enter; ↑ / ↓ andam um passo; Esc desiste |
+| Só leitura | valor sem botões: o app mostra, mas não deixa mudar |
+
+- **Ponto amarelo** à esquerda: o valor está diferente do que está na flash.
+- **Linha apagada**: depende de uma chave que está desligada (ex.: tudo do A/C com o A/C
+  desligado).
+- **Linha vertical amarela na curva**: onde a ECU está lendo a curva agora (temperatura do motor,
+  RPM, tensão...).
+- **Eixo das curvas.** O eixo precisa ser crescente, então cada ponto fica limitado entre os
+  vizinhos: digitar 5 °C entre 10 °C e 30 °C vira 10 °C.
 - **"requer reiniciar a ECU"**: o firmware só lê esse campo ao ligar. Grave na flash e desligue e
   ligue a ECU.
-- O enriquecimento de combustível do A/C fica numa área estendida da página 15, que o firmware
-  só relê quando a página vai para a flash. Sem gravar, não muda nada.
-- **Estado ao vivo**: pedido, compressor, atraso e bloqueios (RPM, TPS, temperatura), direto do
-  byte `airConStatus`.
+- **"vale depois de gravar na flash"**: o campo fica numa área estendida da página 15, que o
+  firmware só relê quando a página vai para a flash. Sem gravar, não muda nada no motor.
+- **Estado ao vivo**: o último grupo de cada painel mostra, em LEDs e valores, o que a ECU está
+  fazendo com aquela configuração.
+- Os campos sem essas marcas **valem na hora**, direto na RAM. Para descartar tudo o que não foi
+  gravado, desligue e ligue a ECU sem gravar.
+
+Em cada painel, "Validado na ECU" diz o que foi mudado na RAM da bancada, o efeito medido no canal
+ao vivo e se a releitura depois de restaurar bateu com a flash.
+
+### Motor
+
+![Motor](docs/config-motor.png)
+
+- Combustível base (`reqFuel`), cilindros, injetores, divisor e modo de injeção. Quase tudo aqui
+  **requer reiniciar**: a ECU calcula o tempo base de injeção só ao ligar.
+- **AFR estequiométrico**: use o do combustível do tanque (gasolina brasileira ~13,2, etanol ~9,0).
+  Vale na hora.
+- **Tempo de abertura do injetor**: tempo morto e a curva de correção por tensão da bateria.
+- **Validado na ECU:** `reqFuel` de 20 para 22 ms não mudou o pulso até reiniciar, como o firmware
+  prevê. Releitura igual à flash.
+
+### Ignição
+
+![Ignição](docs/config-ignicao.png)
+
+- Roda fônica (dentes, falha, alinhamento, borda do sinal), sensor de fase, modo de ignição e
+  dwell.
+- **Hardware** (tensão da saída de ignição e sensor HALL/VR) é **só leitura**: o firmware só
+  repassa esses dois bits para relés da placa, e o efeito elétrico deles ainda não foi medido.
+- O estado ao vivo mostra perdas de sincronia, avanço e dwell atuais.
+- **Validado na ECU:** dwell de 3,0 para 4,0 ms levou o dwell ao vivo de 3,24 para 4,32 ms. A
+  diferença é a correção por tensão.
+
+### Sensores e calibração
+
+![Sensores e calibração](docs/config-sensores.png)
+
+- **TPS**: grave a tensão com a borboleta solta e toda aberta.
+- **Pressão de combustível e de óleo**: tipo de sensor (personalizado, Marflex, 0–10 bar,
+  0–100 psi) e a faixa. Ligar o sensor requer reiniciar.
+- **Ajuste do ponto de ignição**: trava o avanço num valor fixo para conferir com a lâmpada de
+  ponto. **Destrave depois.**
+- Offset da tensão, eletroventilador, bomba de combustível, tacômetro e filtros dos sensores.
+- **Validado na ECU:** travar o ponto em 10° levou o avanço ao vivo de 21° para 10°.
+
+### Sonda lambda
+
+![Sonda lambda](docs/config-sonda.png)
+
+- Tipo de sonda, algoritmo (SIMPLES, PID ou NENHUMA CORREÇÃO) e limite da correção.
+- **Corrigir acima de / abaixo de** estão em AFR. Para pensar em λ, divida pelo AFR
+  estequiométrico do painel Motor.
+- As condições de ativação (temperatura, RPM, TPS, MAP e espera após a partida) precisam estar
+  todas satisfeitas para a correção entrar.
+- **Validado na ECU:** algoritmo SIMPLES com ativação acima de 1000 RPM fez a correção ao vivo sair
+  de 100 % para 104 %.
+
+### Partida do motor
+
+![Partida do motor](docs/config-partida.png)
+
+- Botão de partida (start/stop), RPM de partida, avanço na partida, curva do primeiro pulso
+  (escorva) e curva de enriquecimento por temperatura.
+- O botão de partida vale depois de gravar na flash.
+- **Validado na ECU:** só a leitura. Com o motor girando no simulador, a condição de partida não
+  aparece; o RPM de partida vai até 1000.
+
+### Marcha lenta
+
+![Marcha lenta](docs/config-marchalenta.png)
+
+- Modo de controle (PWM ou motor de passo, malha aberta ou fechada): requer reiniciar.
+- **Malha aberta → malha fechada** é **só leitura**. O firmware lê esse tempo somando os dois bytes
+  guardados, em vez de montar o número de 16 bits. Por isso o valor gravado (4000 ms na bancada)
+  não é o que a ECU aplica (175 ms).
+- Adicionais da lenta para o solenoide e o eletroventilador: valem depois de gravar na flash.
+- Ganhos do controle em malha fechada, frequência do PWM e parâmetros do motor de passo.
+
+### Mapa de marcha lenta
+
+![Mapa de marcha lenta](docs/config-mapamarchalenta.png)
+
+- Alvo de RPM por temperatura do motor, avanço da lenta por RPM e as curvas de abertura (PWM ou
+  passos) na partida e em malha aberta.
+- **Validado na ECU:** +100 RPM na curva de alvo levou o alvo ao vivo de 980 para 1080 RPM.
+
+### Injeção rápida
+
+![Injeção rápida](docs/config-injrapida.png)
+
+- Curvas de enriquecimento por velocidade do TPS e do MAP, limiares, enriquecimento a frio e
+  empobrecimento na desaceleração.
+- **Corte de combustível** (DFCO): TPS máximo, temperatura mínima, espera, RPM de corte e corte
+  gradual.
+- **Validado na ECU:** ligar o DFCO com TPS abaixo de 5 %, sem temperatura mínima e sem espera
+  acendeu o LED de corte. Desligado, apagou.
+
+### Compensações
+
+![Compensações](docs/config-compensacao.png)
+
+- Correções de combustível pela temperatura do ar, pela tensão da bateria (dwell e injetor), pelo
+  aquecimento (WUE) e após a partida. Correções de ignição pela temperatura do ar e do motor.
+- No WUE, o último ponto deve ser 100 %: acima dele a ECU fica no último valor.
+- **Validado na ECU:** +10 % nos pontos de 40 e 50 °C levou a correção de aquecimento ao vivo de
+  108 % para 118 %.
+
+### Controle de largada
+
+![Controle de largada](docs/config-largada.png)
+
+- Largada (TPS mínimo, RPM de início, retardo de ignição, limite de rotação e enriquecimento),
+  troca rápida, entrada da embreagem e limite suave de rotação.
+- Ligar a largada e configurar a entrada da embreagem requerem reiniciar.
+- **Validado na ECU:** o limite suave de 300 para 5000 RPM apagou o LED do limite suave.
+
+### Controle de boost
+
+![Controle de boost](docs/config-boost.png)
+
+- Liga o controle e escolhe malha aberta ou fechada (requer reiniciar). Também tem os ganhos da
+  malha fechada, o corte de boost e o boost por marcha.
+- O **Corte de Boost** é o mesmo campo da "Proteção pressão turbo" do painel Alarmes.
+- **Validado na ECU:** corte de boost em 50 kPa, com MAP de 94 kPa, acendeu o LED de proteção.
+
+### Ar-condicionado
+
+![Ar-condicionado](docs/config-arcond.png)
+
+- Entrada do pedido (terra ou 12 V), atrasos e limites de RPM, TPS e temperatura para liberar o
+  compressor.
+- **Marcha lenta para A/C**: abertura e alvo extras com o A/C ligado. O enriquecimento de
+  combustível vale depois de gravar na flash.
+- **Estado ao vivo**: pedido, compressor, atraso e cada bloqueio (RPM, TPS, temperatura).
+- **Validado na ECU:** o RPM máximo em 500 acendeu o bloqueio por RPM. Restaurado, apagou.
+
+### Alarmes
+
+![Alarmes](docs/config-alarmes.png)
+
+- **Corte de proteção**: o que a ECU corta quando uma proteção dispara (ignição, injeção ou as
+  duas). Em DESLIGADO, nenhuma proteção nem o limitador de rotação atuam.
+- Proteções por boost, temperatura alta do motor, pressão baixa de combustível, pressão do óleo
+  por RPM e lambda pobre. Também tem o limitador de rotação (fixo ou por temperatura).
+- **A proteção de pressão baixa de combustível corta sempre** se o sensor de pressão não estiver
+  ligado: sem sensor, a pressão lida é 0.
+- **Validado na ECU:** o limitador em 1000 RPM acendeu os LEDs de corte. A proteção de pressão de
+  combustível só não cortou nada enquanto estava apenas na RAM. Depois de gravada (2 bar, sem
+  sensor), cortou; desligada e gravada de novo, parou.
+
+### Avisos
+
+![Avisos](docs/config-avisos.png)
+
+- Limites em que o display (IHM) avisa o motorista, antes das proteções do painel Alarmes: boost,
+  temperatura, pressão de combustível, pressão de óleo e rotação.
+- Tudo vale depois de gravar na flash; o aviso de limite de rotação também requer reiniciar. O
+  aviso aparece só no display, não num canal ao vivo, então este painel foi validado só pela
+  leitura.
+
+### Senhas
+
+![Senhas](docs/config-senhas.png)
+
+- **Só leitura.** A senha de partida é um imobilizador: com ela ligada, a injeção fica zerada até o
+  display (IHM) confirmar a senha pela CAN. Um erro aqui deixa o motor sem pegar. Por isso o app só
+  mostra os valores.
+- A senha de estacionamento limita a rotação ao RPM de corte enquanto o modo estiver ativo no
+  display.
+
+### O que não tem painel
+
+- **Sensor de velocidade**: a placa não tem entrada para ele.
+- **Teste de saídas** (acionar injetor, bobina e relés com o motor parado): o firmware não desliga
+  a saída sozinho se a comunicação cair. Fica de fora até ter uma proteção para isso.
+- **Calibração dos sensores de temperatura e da sonda**: são tabelas enviadas por um comando
+  próprio da ECU, não campos de configuração.
+- **Remapeamento de saídas**: desativado no firmware.
 
 ---
 
 ## Linha de comando: `kgmctl`
 
-Tudo o que a interface faz, e mais, pelo terminal. Útil para scripts, backup e para as
-configurações que ainda não têm tela.
+Tudo o que a interface faz, e mais, pelo terminal. Útil para scripts, backup e para os
+campos que não têm painel.
 
 | Comando | O que faz |
 |---|---|
