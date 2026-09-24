@@ -1,8 +1,13 @@
-# MasterFuel Linux
+# mf_linux
 
-Cliente nativo para Linux da ECU **KGM / MasterFuel**, sem Wine e sem Windows. Ele mostra o motor
-ao vivo, replica o monitor do MasterFuel e permite editar as tabelas da ECU, com superfície 3D e
-gravação na flash.
+Ferramenta de tuning nativa para Linux, compatível com ECUs **Speeduino** que usam o protocolo
+serial do **TunerStudio** (comandos com CRC). Sem Wine e sem Windows: mostra o motor ao vivo, lista
+todos os canais da ECU e permite editar as tabelas e a configuração, com superfície 3D e gravação
+na flash.
+
+O layout das páginas de configuração é gerado a partir do `firmware.elf` da ECU (veja
+[Arquivos do projeto](#arquivos-do-projeto)). Um firmware com structs diferentes precisa ter o
+layout regenerado antes do uso.
 
 ![Painel](docs/painel.png)
 
@@ -60,8 +65,8 @@ gravação na flash.
    ```
 
    ```text
-   assinatura : MasterFuel-V001.008
-   produto    : MasterFuel-V001.008
+   assinatura : <assinatura do firmware>
+   produto    : <nome do firmware>
    protocolo  : v2, blocking factor 121, table blocking factor 64
    burn pend. : nao
    ```
@@ -162,9 +167,9 @@ bateria 113% dá 132%.
 
 ![Monitor](docs/monitor.png)
 
-É a mesma grade de canais do monitor do MasterFuel, com os mesmos nomes. Marque **"mostrar canais
-sem rótulo no MasterFuel"** para ver também os canais internos da ECU (tempo ligada, cargas usadas
-nas tabelas, bytes de status etc.). Canais do tipo "bits" aparecem em hexadecimal.
+Todos os canais ao vivo da ECU em uma grade, com nome e unidade. Por padrão aparecem só os canais
+com rótulo; a caixa no topo mostra também os internos (tempo ligada, cargas usadas nas tabelas,
+bytes de status etc.). Canais do tipo "bits" aparecem em hexadecimal.
 
 ---
 
@@ -259,8 +264,8 @@ Segurar o `+` não entope a serial: o app manda só o estado final da tabela.
 
 ## Configuração
 
-Painéis com os mesmos campos, rótulos e faixas do MasterFuel. Por enquanto só o
-**Ar-condicionado**.
+Painéis com os campos de configuração agrupados por função, já na unidade real e com as faixas
+aceitas pela ECU. Por enquanto só o **Ar-condicionado**.
 
 ![Configuração do ar-condicionado](docs/config-arcond.png)
 
@@ -273,8 +278,8 @@ Painéis com os mesmos campos, rótulos e faixas do MasterFuel. Por enquanto só
 - Linha apagada = depende de outra chave desligada (ex.: tudo do A/C com o A/C desligado).
 - **"requer reiniciar a ECU"**: o firmware só lê esse campo ao ligar. Grave na flash e desligue e
   ligue a ECU.
-- O enriquecimento de combustível do A/C fica na área própria da KGM, que o firmware só relê
-  quando a página vai para a flash. Sem gravar, não muda nada.
+- O enriquecimento de combustível do A/C fica numa área estendida da página 15, que o firmware
+  só relê quando a página vai para a flash. Sem gravar, não muda nada.
 - **Estado ao vivo**: pedido, compressor, atraso e bloqueios (RPM, TPS, temperatura), direto do
   byte `airConStatus`.
 
@@ -582,7 +587,7 @@ aquele ponto.
 | `pages.py` | Mapa das 15 páginas de configuração, tabelas e campos |
 | `layouts.py` | Layout dos campos de configuração, **gerado** a partir do firmware (não editar à mão) |
 | `gen_layouts.py` | Gera o `layouts.py` a partir do `firmware.elf` (rodar de novo se o firmware mudar os structs de configuração) |
-| `channels.py` | Canais ao vivo: posição, escala, unidade e nome no MasterFuel |
+| `channels.py` | Canais ao vivo: posição, escala, unidade e nome exibido |
 | `qml/` | Telas (Painel, Monitor, Tabelas, Configuração) |
 | `shaders/` | Shader dos mostradores. Compilado automaticamente para `.qsb` ao abrir o app |
 | `backups/` | Backups feitos pelo `dump` e pelo `restore` |
@@ -591,5 +596,5 @@ aquele ponto.
 Para regenerar o layout depois de mudar o firmware:
 
 ```bash
-python3 gen_layouts.py ../kgm-firmware/build/firmware-debug/firmware.elf
+python3 gen_layouts.py caminho/do/firmware.elf
 ```
