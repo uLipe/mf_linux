@@ -360,9 +360,9 @@ ao vivo e se a releitura depois de restaurar bateu com a flash.
 ![Marcha lenta](docs/config-marchalenta.png)
 
 - Modo de controle (PWM ou motor de passo, malha aberta ou fechada): requer reiniciar.
-- **Malha aberta → malha fechada** é **só leitura**. O firmware lê esse tempo somando os dois bytes
-  guardados, em vez de montar o número de 16 bits. Por isso o valor gravado (4000 ms na bancada)
-  não é o que a ECU aplica (175 ms).
+- **Malha aberta → malha fechada** vai até 4000 ms e vale depois de gravar na flash. Firmwares
+  mais antigos somam os dois bytes guardados em vez de montar o número de 16 bits. Nesses
+  firmwares, os 4000 ms gravados na bancada viram 175 ms.
 - Adicionais da lenta para o solenoide e o eletroventilador: valem depois de gravar na flash.
 - Ganhos do controle em malha fechada, frequência do PWM e parâmetros do motor de passo.
 
