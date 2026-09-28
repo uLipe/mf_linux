@@ -439,7 +439,7 @@ PANELS = [
             num('Tempo após a partida -> malha aberta', 'config2.idleTaperTime', 0.1, unit='s',
                 lo=0, hi=25.5, detail='transição da tabela de partida para a de funcionamento'),
             num('Malha aberta -> malha fechada', 'kgm.idleOLtoCLTime', unit='ms', lo=0, hi=4000,
-                detail='só modos MA+MF; firmware anterior ao 78b0104 aplica byte 123 + byte 124 '
+                detail='só modos MA+MF; firmware anterior ao 21682b7 aplica byte 123 + byte 124 '
                        'em vez do valor de 16 bits'),
         ]),
         ('Marcha lenta solenóide', [
